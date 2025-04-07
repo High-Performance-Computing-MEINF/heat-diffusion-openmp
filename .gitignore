@@ -1,3 +1,6 @@
+#
+*.bmp
+
 # Prerequisites
 *.d
 
