@@ -12,6 +12,7 @@ To build the project, use the following command:
 ```bash
 make
 ```
+It will compile both parallel and serial implementations that can be also compiled using `make parallel` or `make serial`. 
 
 To run the program, use the following command:
 
