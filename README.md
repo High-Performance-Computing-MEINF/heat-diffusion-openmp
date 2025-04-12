@@ -19,5 +19,10 @@ To run the program, use the following command:
 ```bash
 ./heat_serial <matrix_size> <steps> <output_file.bmp>
 ```
+or
+
+```bash
+./heat_parallel <matrix_size> <steps> <output_file.bmp>
+```
 
 Replace `<matrix_size>` with the size of the square matrix (e.g., 100, 1000), `<steps>` with the number of time steps, and `<output_file.bmp>` with the desired output BMP file name.
