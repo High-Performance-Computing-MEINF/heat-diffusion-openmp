@@ -1,7 +1,6 @@
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 
 #define BMP_HEADER_SIZE 54
 #define ALPHA 0.01 // Thermal diffusivity
@@ -25,6 +24,7 @@ void print_grid(double *grid, int nx, int ny) {
 // Function to initialize the grid
 void initialize_grid(double *grid, int nx, int ny, int temp_source) {
   int i, j;
+#pragma omp parallel for collapse(2)
   for (i = 0; i < nx; i++) {
     for (j = 0; j < ny; j++) {
       if (i == j)
@@ -39,13 +39,11 @@ void initialize_grid(double *grid, int nx, int ny, int temp_source) {
 
 void solve_heat_equation(double *grid, double *new_grid, int steps, double r,
                          int nx, int ny) {
-  double start_time, elapsed_time;
   int step, i, j;
   double *temp;
-  start_time = omp_get_wtime();
   for (step = 0; step < steps; step++) {
-#pragma omp parallel for num_threads(4) private(i, j) collapse(2)
     // Compute the new grid
+#pragma omp parallel for private(j) collapse(2)
     for (i = 1; i < nx - 1; i++) {
       for (j = 1; j < ny - 1; j++) {
 
@@ -58,10 +56,12 @@ void solve_heat_equation(double *grid, double *new_grid, int steps, double r,
       }
     }
     // Apply boundary conditions (Dirichlet: u=0 on boundaries)
+#pragma omp parallel for
     for (i = 0; i < nx; i++) {
       new_grid[0 * ny + i] = 0.0;
       new_grid[ny * (nx - 1) + i] = 0.0;
     }
+#pragma omp parallel for
     for (j = 0; j < ny; j++) {
       new_grid[0 + j * nx] = 0.0;
       new_grid[(ny - 1) + j * nx] = 0.0;
@@ -71,9 +71,6 @@ void solve_heat_equation(double *grid, double *new_grid, int steps, double r,
     grid = new_grid;
     new_grid = temp;
   }
-
-  elapsed_time = omp_get_wtime() - start_time;
-  printf("SOlved after %f\n", elapsed_time);
 }
 
 // Function to write BMP file header
@@ -158,7 +155,7 @@ void write_grid(FILE *file, double *grid, int nx, int ny) {
 
 // Main function
 int main(int argc, char *argv[]) {
-  clock_t time_begin, time_end;
+  double time_begin, time_end;
   char car;
   double r;   // constant of the heat equation
   int nx, ny; // Grid size in x-direction and y-direction
@@ -174,7 +171,7 @@ int main(int argc, char *argv[]) {
   nx = ny = atoi(argv[1]);
   r = ALPHA * DT / (DX * DY);
   steps = atoi(argv[2]);
-  time_begin = clock();
+  time_begin = omp_get_wtime();
   // Allocate memory for the grid
   double *grid = (double *)calloc(nx * ny, sizeof(double));
   double *new_grid = (double *)calloc(nx * ny, sizeof(double));
@@ -200,8 +197,7 @@ int main(int argc, char *argv[]) {
   //  Free allocated memory
   free(grid);
   free(new_grid);
-  time_end = clock();
-  printf("The Execution Time=%fs with a matrix size of %dx%d and %d steps\n",
-         (time_end - time_begin) / (double)CLOCKS_PER_SEC, nx, nx, steps);
+  time_end = omp_get_wtime();
+  printf("Execution Time = %f seconds\n", time_end - time_begin);
   return 0;
 }
