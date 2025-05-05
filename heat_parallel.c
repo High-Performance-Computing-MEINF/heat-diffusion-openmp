@@ -24,7 +24,7 @@ void print_grid(double *grid, int nx, int ny) {
 // Function to initialize the grid
 void initialize_grid(double *grid, int nx, int ny, int temp_source) {
   int i, j;
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for private(i, j) collapse(2)
   for (i = 0; i < nx; i++) {
     for (j = 0; j < ny; j++) {
       if (i == j)
@@ -42,8 +42,8 @@ void solve_heat_equation(double *grid, double *new_grid, int steps, double r,
   int step, i, j;
   double *temp;
   for (step = 0; step < steps; step++) {
-    // Compute the new grid
-#pragma omp parallel for private(j) collapse(2)
+// Compute the new grid
+#pragma omp parallel for private(i, j) collapse(2)
     for (i = 1; i < nx - 1; i++) {
       for (j = 1; j < ny - 1; j++) {
 
@@ -56,12 +56,12 @@ void solve_heat_equation(double *grid, double *new_grid, int steps, double r,
       }
     }
     // Apply boundary conditions (Dirichlet: u=0 on boundaries)
-#pragma omp parallel for
+#pragma omp parallel for private(i)
     for (i = 0; i < nx; i++) {
       new_grid[0 * ny + i] = 0.0;
       new_grid[ny * (nx - 1) + i] = 0.0;
     }
-#pragma omp parallel for
+#pragma omp parallel for private(j)
     for (j = 0; j < ny; j++) {
       new_grid[0 + j * nx] = 0.0;
       new_grid[(ny - 1) + j * nx] = 0.0;
