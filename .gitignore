@@ -1,5 +1,9 @@
 #
 *.bmp
+compile_commands.json
+.cache/
+result/
+result
 
 # Prerequisites
 *.d
