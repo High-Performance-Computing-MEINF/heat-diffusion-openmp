@@ -1,3 +1,4 @@
+#include <mpi.h>
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,16 +38,33 @@ void initialize_grid(double *grid, int nx, int ny, int temp_source) {
   }
 }
 
-void solve_heat_equation(double *grid, double *new_grid, int steps, double r,
-                         int nx, int ny) {
+void solve_heat_equation_hybrid(double *grid, double *new_grid, int steps,
+                                double r, int nx, int ny, int local_nx,
+                                int start_i, int rank, int size) {
   int step, i, j;
   double *temp;
-  for (step = 0; step < steps; step++) {
-// Compute the new grid
-#pragma omp parallel for private(i, j) collapse(2)
-    for (i = 1; i < nx - 1; i++) {
-      for (j = 1; j < ny - 1; j++) {
+  MPI_Status status;
 
+  // we'll use row‐major storage, with rows [0..local_nx+1] (0 and local_nx+1
+  // are ghosts)
+  for (step = 0; step < steps; step++) {
+    // 1) Exchange ghost rows: send your first real row to rank-1, recv into row
+    // 0;
+    //    send your last real row to rank+1, recv into row local_nx+1.
+    if (rank > 0) {
+      MPI_Sendrecv(&grid[1 * ny], ny, MPI_DOUBLE, rank - 1, 0, &grid[0 * ny],
+                   ny, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, &status);
+    }
+    if (rank < size - 1) {
+      MPI_Sendrecv(&grid[local_nx * ny], ny, MPI_DOUBLE, rank + 1, 0,
+                   &grid[(local_nx + 1) * ny], ny, MPI_DOUBLE, rank + 1, 0,
+                   MPI_COMM_WORLD, &status);
+    }
+
+// 2) Compute the new grid on your subdomain interior [1..local_nx] × [1..ny-2]
+#pragma omp parallel for collapse(2) private(i, j)
+    for (i = 1; i <= local_nx; i++) {
+      for (j = 1; j < ny - 1; j++) {
         new_grid[i * ny + j] =
             grid[i * ny + j] +
             r * (grid[(i + 1) * ny + j] + grid[(i - 1) * ny + j] -
@@ -55,24 +73,36 @@ void solve_heat_equation(double *grid, double *new_grid, int steps, double r,
                  2 * grid[i * ny + j]);
       }
     }
-    // Apply boundary conditions (Dirichlet: u=0 on boundaries)
-#pragma omp parallel for private(i)
-    for (i = 0; i < nx; i++) {
-      new_grid[0 * ny + i] = 0.0;
-      new_grid[ny * (nx - 1) + i] = 0.0;
-    }
-#pragma omp parallel for private(j)
-    for (j = 0; j < ny; j++) {
-      new_grid[0 + j * nx] = 0.0;
-      new_grid[(ny - 1) + j * nx] = 0.0;
-    } // Swap the grids
 
+    // 3) Apply Dirichlet BCs on global boundaries:
+    //    - Top boundary only on rank 0’s first real row (i==1 corresponds to
+    //    global i==0)
+    if (rank == 0) {
+#pragma omp parallel for
+      for (j = 0; j < ny; j++) {
+        new_grid[1 * ny + j] = 0.0;
+      }
+    }
+    //    - Bottom boundary only on rank size-1’s last real row
+    if (rank == size - 1) {
+#pragma omp parallel for
+      for (j = 0; j < ny; j++) {
+        new_grid[local_nx * ny + j] = 0.0;
+      }
+    }
+//    - Left and right boundaries on every rank’s subdomain
+#pragma omp parallel for private(i)
+    for (i = 1; i <= local_nx; i++) {
+      new_grid[i * ny + 0] = 0.0;
+      new_grid[i * ny + (ny - 1)] = 0.0;
+    }
+
+    // 4) Swap pointers
     temp = grid;
     grid = new_grid;
     new_grid = temp;
   }
 }
-
 // Function to write BMP file header
 void write_bmp_header(FILE *file, int width, int height) {
   unsigned char header[BMP_HEADER_SIZE] = {0};
@@ -153,51 +183,107 @@ void write_grid(FILE *file, double *grid, int nx, int ny) {
   }
 }
 
-// Main function
 int main(int argc, char *argv[]) {
-  double time_begin, time_end;
-  char car;
-  double r;   // constant of the heat equation
-  int nx, ny; // Grid size in x-direction and y-direction
-  int steps;  // Number of time steps
-              // double DT;
-  if (argc != 4) {
-    printf("Command line wrong\n");
-    printf("Command line should be: heat_serial size steps "
-           "name_output_file.bmp. \n");
-    printf("Try again!!!!\n");
-    return 1;
-  }
-  nx = ny = atoi(argv[1]);
-  r = ALPHA * DT / (DX * DY);
-  steps = atoi(argv[2]);
-  time_begin = omp_get_wtime();
-  // Allocate memory for the grid
-  double *grid = (double *)calloc(nx * ny, sizeof(double));
-  double *new_grid = (double *)calloc(nx * ny, sizeof(double));
+  int rank, size;
+  MPI_Init(&argc, &argv);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-  // Initialize the grid
-  initialize_grid(grid, nx, ny, T);
-
-  // Solve heat equation
-  solve_heat_equation(grid, new_grid, steps, r, nx, ny);
-  // Write grid into a bmp file
-  FILE *file = fopen(argv[3], "wb");
-  if (!file) {
-    printf("Error opening the output file.\n");
-    return 1;
+  int nx, ny, steps;
+  double r;
+  char filename[256];
+  if (rank == 0) {
+    if (argc != 4) {
+      fprintf(stderr, "Usage: %s size steps name_output_file.bmp\n", argv[0]);
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    nx = atoi(argv[1]);
+    ny = nx;
+    steps = atoi(argv[2]);
+    snprintf(filename, sizeof(filename), "%s", argv[3]);
+    r = ALPHA * DT / (DX * DY);
   }
 
-  write_bmp_header(file, nx, ny);
-  write_grid(file, grid, nx, ny);
+  // send the parameters to all ranks
+  MPI_Bcast(&nx, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&ny, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&steps, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&r, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-  fclose(file);
-  // Function to visualize the values of the temperature. Use only for debugging
-  //  print_grid(grid, nx, ny);
-  //  Free allocated memory
-  free(grid);
-  free(new_grid);
-  time_end = omp_get_wtime();
-  printf("Execution Time = %f seconds\n", time_end - time_begin);
+  // compute each rank grid
+  int base = nx / size;
+  int rem = nx % size;
+  int local_nx = base + (rank < rem ? 1 : 0);
+  int start_i = rank * base + (rank < rem ? rank : rem);
+
+  // allocate local arrays (with 2 ghost‐rows)
+  double *local_grid = calloc((local_nx + 2) * ny, sizeof(double));
+  double *local_new_grid = calloc((local_nx + 2) * ny, sizeof(double));
+  if (!local_grid || !local_new_grid) {
+    fprintf(stderr, "Rank %d: allocation failed\n", rank);
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+
+  // prepare scatter/gather counts & displacements
+  int *counts = malloc(size * sizeof(int));
+  int *displs = malloc(size * sizeof(int));
+  for (int rnk = 0; rnk < size; rnk++) {
+    int ln = base + (rnk < rem ? 1 : 0);
+    counts[rnk] = ln * ny;
+    displs[rnk] = ((rnk * base) + (rnk < rem ? rnk : rem)) * ny;
+  }
+
+  // rank 0 initializes the full grid
+  double *full_grid = NULL;
+  if (rank == 0) {
+    full_grid = malloc(nx * ny * sizeof(double));
+    initialize_grid(full_grid, nx, ny, T);
+  }
+  // scatter into grid[1..local_nx] (first row & local_nx+1 are ghosts)
+  MPI_Scatterv(full_grid, counts, displs, MPI_DOUBLE, &local_grid[1 * ny],
+               local_nx * ny, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+  if (rank == 0) {
+    free(full_grid);
+    full_grid = NULL;
+  }
+
+  // sync and start timer 
+  MPI_Barrier(MPI_COMM_WORLD);
+  double start_time = MPI_Wtime();
+
+  solve_heat_equation_hybrid(local_grid, local_new_grid, steps, r, nx, ny,
+                             local_nx, start_i, rank, size);
+
+  // wait for all ranks to finish
+  MPI_Barrier(MPI_COMM_WORLD);
+  double end_time = MPI_Wtime();
+
+  // gather the interior rows back to full_grid on rank 0
+  if (rank == 0) {
+    full_grid = malloc(nx * ny * sizeof(double));
+  }
+  MPI_Gatherv(&local_grid[1 * ny], local_nx * ny, MPI_DOUBLE, full_grid, counts,
+              displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+  // rank 0 writes out .bmp and prints timing
+  if (rank == 0) {
+    FILE *f = fopen(filename, "wb");
+    if (!f) {
+      fprintf(stderr, "Error opening output file \"%s\"\n", filename);
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    write_bmp_header(f, nx, ny);
+    write_grid(f, full_grid, nx, ny);
+    fclose(f);
+    printf("Execution Time = %f seconds\n", end_time - start_time);
+    free(full_grid);
+  }
+
+  free(local_grid);
+  free(local_new_grid);
+  free(counts);
+  free(displs);
+
+  MPI_Finalize();
   return 0;
 }
