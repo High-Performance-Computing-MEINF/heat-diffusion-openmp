@@ -45,12 +45,9 @@ void solve_heat_equation_hybrid(double *grid, double *new_grid, int steps,
   double *temp;
   MPI_Status status;
 
-  // we'll use row‐major storage, with rows [0..local_nx+1] (0 and local_nx+1
-  // are ghosts)
   for (step = 0; step < steps; step++) {
-    // 1) Exchange ghost rows: send your first real row to rank-1, recv into row
-    // 0;
-    //    send your last real row to rank+1, recv into row local_nx+1.
+    // 1) Exchange border rows: send first real row to rank-1, recv into row 0;
+    //    send last real row to rank+1, recv into row local_nx+1.
     if (rank > 0) {
       MPI_Sendrecv(&grid[1 * ny], ny, MPI_DOUBLE, rank - 1, 0, &grid[0 * ny],
                    ny, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, &status);
@@ -61,7 +58,7 @@ void solve_heat_equation_hybrid(double *grid, double *new_grid, int steps,
                    MPI_COMM_WORLD, &status);
     }
 
-// 2) Compute the new grid on your subdomain interior [1..local_nx] × [1..ny-2]
+// Compute the new grid
 #pragma omp parallel for collapse(2) private(i, j)
     for (i = 1; i <= local_nx; i++) {
       for (j = 1; j < ny - 1; j++) {
@@ -74,8 +71,8 @@ void solve_heat_equation_hybrid(double *grid, double *new_grid, int steps,
       }
     }
 
-    // 3) Apply Dirichlet BCs on global boundaries:
-    //    - Top boundary only on rank 0’s first real row (i==1 corresponds to
+    // Apply boundary conditions (Dirichlet: u=0 on boundaries)
+    //    Top boundary only on rank 0’s first real row (i==1 corresponds to
     //    global i==0)
     if (rank == 0) {
 #pragma omp parallel for
@@ -97,7 +94,7 @@ void solve_heat_equation_hybrid(double *grid, double *new_grid, int steps,
       new_grid[i * ny + (ny - 1)] = 0.0;
     }
 
-    // 4) Swap pointers
+    // Swap the grids
     temp = grid;
     grid = new_grid;
     new_grid = temp;
@@ -247,7 +244,7 @@ int main(int argc, char *argv[]) {
     full_grid = NULL;
   }
 
-  // sync and start timer 
+  // sync and start timer
   MPI_Barrier(MPI_COMM_WORLD);
   double start_time = MPI_Wtime();
 
