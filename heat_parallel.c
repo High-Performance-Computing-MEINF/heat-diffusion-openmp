@@ -224,7 +224,8 @@ int main(int argc, char *argv[]) {
   // prepare scatter/gather counts & displacements
   int *counts = malloc(size * sizeof(int));
   int *displs = malloc(size * sizeof(int));
-  for (int rnk = 0; rnk < size; rnk++) {
+  int rnk;
+  for (rnk = 0; rnk < size; rnk++) {
     int ln = base + (rnk < rem ? 1 : 0);
     counts[rnk] = ln * ny;
     displs[rnk] = ((rnk * base) + (rnk < rem ? rnk : rem)) * ny;
